@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useAuthStore } from '../stores/authStore'
 import { Button } from '../components/Button'
 import { Input, Select } from '../components/Input'
@@ -31,6 +31,12 @@ export const AdminPatients = () => {
   const [form, setForm] = useState({})
   const [transferForm, setTransferForm] = useState({ organization_id: '' })
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPatients, setTotalPatients] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+  const PAGE_SIZE = 25
+
   if (role !== 'super_admin') {
     return (
       <div className="p-8 md:p-12 flex items-center justify-center min-h-[50vh]">
@@ -47,39 +53,68 @@ export const AdminPatients = () => {
     )
   }
 
-  useEffect(() => {
-    loadData()
-  }, [])
+  const loadClinics = useCallback(async () => {
+    try {
+      const orgs = await getOrganizations()
+      setClinics(orgs || [])
+    } catch (err) {
+      console.error('Error loading clinics:', err)
+    }
+  }, [getOrganizations])
 
-  const loadData = async () => {
+  const loadPatients = useCallback(async (page = 1, searchQuery = '', clinicId = '') => {
     setLoading(true)
     try {
-      const [orgs, allPatients] = await Promise.all([
-        getOrganizations(),
-        db.getPatients()
-      ])
-      setClinics(orgs || [])
-      setPatients(allPatients || [])
+      const result = await db.getPatients(clinicId || null, {
+        page,
+        pageSize: PAGE_SIZE,
+        search: searchQuery,
+        searchPhone: true
+      })
+
+      setPatients(result.data || [])
+      setTotalPatients(result.totalCount)
+      setTotalPages(result.totalPages)
+      setCurrentPage(result.currentPage)
     } catch (err) {
-      console.error('Error loading data:', err)
+      console.error('Error loading patients:', err)
+      setPatients([])
+      setTotalPatients(0)
+      setTotalPages(0)
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    loadClinics()
+  }, [loadClinics])
+
+  useEffect(() => {
+    loadPatients(1, '', filterClinic)
+  }, [filterClinic, loadPatients])
+
+  const handleSearchChange = (e) => {
+    const value = e.target.value
+    setSearch(value)
+    loadPatients(1, value, filterClinic)
+  }
+
+  const handleClinicChange = (e) => {
+    const value = e.target.value
+    setFilterClinic(value)
+    loadPatients(1, search, value)
+  }
+
+  const handlePageChange = (page) => {
+    loadPatients(page, search, filterClinic)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const getClinicName = (orgId) => {
     const clinic = clinics.find(c => c.id === orgId)
     return clinic ? clinic.name : '-'
   }
-
-  const filteredPatients = patients.filter(p => {
-    const matchSearch =
-      p.name?.toLowerCase().includes(search.toLowerCase()) ||
-      p.medical_record_number?.toLowerCase().includes(search.toLowerCase()) ||
-      p.phone?.toLowerCase().includes(search.toLowerCase())
-    const matchClinic = !filterClinic || p.organization_id === filterClinic
-    return matchSearch && matchClinic
-  })
 
   const handleEdit = (patient) => {
     setForm({ ...patient })
@@ -91,7 +126,7 @@ export const AdminPatients = () => {
     setSaving(true)
     try {
       await db.updatePatient(editPatient.id, form)
-      await loadData()
+      await loadPatients(currentPage, search, filterClinic)
       setEditPatient(null)
     } catch (err) {
       alert('Gagal update: ' + err.message)
@@ -118,7 +153,7 @@ export const AdminPatients = () => {
     setSaving(true)
     try {
       await db.updatePatient(transferPatient.id, { organization_id: transferForm.organization_id })
-      await loadData()
+      await loadPatients(currentPage, search, filterClinic)
       setTransferPatient(null)
     } catch (err) {
       alert('Gagal transfer: ' + err.message)
@@ -130,7 +165,7 @@ export const AdminPatients = () => {
   const handleDelete = async () => {
     try {
       await db.deletePatient(deleteConfirm.id)
-      await loadData()
+      await loadPatients(currentPage, search, filterClinic)
       setDeleteConfirm(null)
     } catch (err) {
       alert('Gagal hapus: ' + err.message)
@@ -152,7 +187,7 @@ export const AdminPatients = () => {
               Kelola Pasien
             </h1>
             <p className="text-sm text-slate-500 mt-1">
-              {filteredPatients.length} dari {patients.length} pasien
+              {totalPatients} pasien terdaftar
               {filterClinic && ` di ${getClinicName(filterClinic)}`}
             </p>
           </div>
@@ -172,14 +207,14 @@ export const AdminPatients = () => {
               type="text"
               placeholder="Cari nama, No. RM, atau HP..."
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={handleSearchChange}
               className="w-full pl-11 pr-4 py-3 rounded-xl bg-white border border-slate-200 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10 outline-none transition-all text-sm"
             />
           </div>
           <div className="w-full sm:w-64">
             <select
               value={filterClinic}
-              onChange={(e) => setFilterClinic(e.target.value)}
+              onChange={handleClinicChange}
               className="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10 outline-none transition-all text-sm cursor-pointer"
             >
               <option value="">Semua Klinik</option>
@@ -199,7 +234,7 @@ export const AdminPatients = () => {
               <div key={i} className="h-20 bg-slate-100 rounded-xl animate-pulse" />
             ))}
           </div>
-        ) : filteredPatients.length === 0 ? (
+        ) : patients.length === 0 ? (
           <div className="text-center py-16">
             <div className="w-20 h-20 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <svg className="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -209,86 +244,143 @@ export const AdminPatients = () => {
             <p className="text-slate-500 font-medium">Tidak ada pasien ditemukan</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredPatients.map(patient => (
-              <div
-                key={patient.id}
-                className="bg-white border border-slate-200/80 rounded-xl p-4 md:p-5 hover:shadow-md hover:border-slate-300 transition-all"
-              >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  {/* Patient Info */}
-                  <div className="flex items-start gap-4 min-w-0">
-                    <div className="w-12 h-12 bg-gradient-to-br from-sky-400 to-cyan-500 rounded-xl flex items-center justify-center text-white font-bold text-base shadow-lg shadow-sky-500/20 flex-shrink-0">
-                      {patient.name?.[0]?.toUpperCase() || '?'}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <h3 className="font-semibold text-slate-800">{patient.name}</h3>
-                        {patient.allergies && (
-                          <span className="text-xs bg-red-50 text-red-600 px-2.5 py-1 rounded-full font-medium border border-red-100 flex-shrink-0">
-                            ⚠️ Alergi
+          <>
+            <div className="space-y-3">
+              {patients.map(patient => (
+                <div
+                  key={patient.id}
+                  className="bg-white border border-slate-200/80 rounded-xl p-4 md:p-5 hover:shadow-md hover:border-slate-300 transition-all"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    {/* Patient Info */}
+                    <div className="flex items-start gap-4 min-w-0">
+                      <div className="w-12 h-12 bg-gradient-to-br from-sky-400 to-cyan-500 rounded-xl flex items-center justify-center text-white font-bold text-base shadow-lg shadow-sky-500/20 flex-shrink-0">
+                        {(patient.name || '?')[0]?.toUpperCase() || '?'}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <h3 className="font-semibold text-slate-800">{patient.name}</h3>
+                          {patient.allergies && (
+                            <span className="text-xs bg-red-50 text-red-600 px-2.5 py-1 rounded-full font-medium border border-red-100 flex-shrink-0">
+                              ⚠️ Alergi
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                          <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-xs">{patient.medical_record_number || '-'}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>{patient.gender === 'L' ? 'Laki-laki' : patient.gender === 'P' ? 'Perempuan' : '-'}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>{patient.age || calculateAge(patient.birth_date)} th</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <span className="text-xs bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full font-medium border border-purple-100">
+                            🏥 {getClinicName(patient.organization_id)}
                           </span>
-                        )}
+                        </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
-                        <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-xs">{patient.medical_record_number || '-'}</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{patient.gender === 'L' ? 'Laki-laki' : patient.gender === 'P' ? 'Perempuan' : '-'}</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{patient.age || calculateAge(patient.birth_date)} th</span>
-                      </div>
-                      <div className="mt-1.5">
-                        <span className="text-xs bg-purple-50 text-purple-600 px-2.5 py-1 rounded-full font-medium border border-purple-100">
-                          🏥 {getClinicName(patient.organization_id)}
-                        </span>
-                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handleTransfer(patient)}
+                        className="text-xs"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                        </svg>
+                        Transfer
+                      </Button>
+                      <button
+                        onClick={() => handleEdit(patient)}
+                        className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition-colors"
+                        title="Edit"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => setDeleteConfirm(patient)}
+                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
+                        title="Hapus"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
                     </div>
                   </div>
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => handleTransfer(patient)}
-                      className="text-xs"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                      </svg>
-                      Transfer
-                    </Button>
-                    <button
-                      onClick={() => handleEdit(patient)}
-                      className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition-colors"
-                      title="Edit"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={() => setDeleteConfirm(patient)}
-                      className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                      title="Hapus"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
+                  {(patient.address || patient.phone) && (
+                    <p className="mt-3 text-sm text-slate-400 truncate">
+                      {patient.address && `${patient.address}`}
+                      {patient.address && patient.phone && ' • '}
+                      {patient.phone && patient.phone}
+                    </p>
+                  )}
                 </div>
+              ))}
+            </div>
 
-                {(patient.address || patient.phone) && (
-                  <p className="mt-3 text-sm text-slate-400 truncate">
-                    {patient.address && `${patient.address}`}
-                    {patient.address && patient.phone && ' • '}
-                    {patient.phone && patient.phone}
-                  </p>
-                )}
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between pt-4 border-t border-slate-200 mt-4">
+                <p className="text-sm text-slate-500">
+                  Menampilkan {patients.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0}-{Math.min(currentPage * PAGE_SIZE, totalPatients)} dari {totalPatients} pasien
+                  {search && ` (filter: "${search}")`}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum
+                    if (totalPages <= 5) {
+                      pageNum = i + 1
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i
+                    } else {
+                      pageNum = currentPage - 2 + i
+                    }
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => handlePageChange(pageNum)}
+                        className={`w-9 h-9 rounded-lg text-sm font-medium transition-colors ${
+                          currentPage === pageNum
+                            ? 'bg-sky-500 text-white'
+                            : 'border border-slate-200 hover:bg-slate-50 text-slate-600'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    )
+                  })}
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </div>
 

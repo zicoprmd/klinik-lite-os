@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/authStore'
 import { Button } from '../components/Button'
 import { Input, Select } from '../components/Input'
 import { Modal, ConfirmDialog } from '../components/Modal'
+import { ImportPatientModal } from '../components/ImportPatientModal'
 import { usePatientStore } from '../stores/patientStore'
 
 const calculateAge = (birthDate) => {
@@ -20,7 +21,10 @@ const calculateAge = (birthDate) => {
 
 export const Patients = () => {
   const { role, getOrganizations } = useAuthStore()
-  const { patients, fetchPatients, loading, updatePatient, deletePatient, createVisit } = usePatientStore()
+  const {
+    patients, fetchPatients, loading, updatePatient, deletePatient, createVisit, importPatients,
+    totalPatients, totalPages, currentPage, searchQuery, goToPage
+  } = usePatientStore()
   const [search, setSearch] = useState('')
   const [editPatient, setEditPatient] = useState(null)
   const [quickVisit, setQuickVisit] = useState(null)
@@ -29,6 +33,7 @@ export const Patients = () => {
   const [form, setForm] = useState({})
   const [quickSoip, setQuickSoip] = useState({ subjective: '', objective: '', assessment: '', plan: '' })
   const [clinics, setClinics] = useState([])
+  const [showImport, setShowImport] = useState(false)
 
   const loadClinics = async () => {
     if (role === 'super_admin') {
@@ -38,14 +43,19 @@ export const Patients = () => {
   }
 
   useEffect(() => {
-    fetchPatients()
+    fetchPatients({ page: 1, search: '' })
     loadClinics()
   }, [])
 
-  const filteredPatients = patients.filter(p =>
-    p.name?.toLowerCase().includes(search.toLowerCase()) ||
-    p.medical_record_number?.toLowerCase().includes(search.toLowerCase())
-  )
+  const handleSearchChange = (e) => {
+    const value = e.target.value
+    setSearch(value)
+    fetchPatients({ page: 1, search: value })
+  }
+
+  const handlePageChange = (page) => {
+    goToPage(page)
+  }
 
   const handleEdit = (patient) => {
     setForm({ ...patient })
@@ -122,7 +132,7 @@ export const Patients = () => {
               </div>
               Daftar Pasien
             </h1>
-            <p className="text-sm text-slate-500 mt-1">{patients.length} pasien terdaftar</p>
+            <p className="text-sm text-slate-500 mt-1">{totalPatients} pasien terdaftar</p>
           </div>
           <div className="flex gap-3">
             <Link to="/pendaftaran" className="hidden sm:block">
@@ -133,6 +143,12 @@ export const Patients = () => {
                 Link Daftar
               </Button>
             </Link>
+            <Button variant="secondary" className="text-sm" onClick={() => setShowImport(true)}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              Import
+            </Button>
             <Link to="/patients/new">
               <Button className="text-sm">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -157,7 +173,7 @@ export const Patients = () => {
             type="text"
             placeholder="Cari nama atau No. RM..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={handleSearchChange}
             className="w-full pl-11 pr-4 py-3 rounded-xl bg-white border border-slate-200 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10 outline-none transition-all text-sm"
           />
         </div>
@@ -171,7 +187,7 @@ export const Patients = () => {
               <div key={i} className="h-20 bg-slate-100 rounded-xl animate-pulse" />
             ))}
           </div>
-        ) : filteredPatients.length === 0 ? (
+        ) : patients.length === 0 ? (
           <div className="text-center py-16">
             <div className="w-20 h-20 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <svg className="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -184,8 +200,9 @@ export const Patients = () => {
             </Link>
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredPatients.map(patient => (
+          <>
+            <div className="space-y-3">
+              {patients.map(patient => (
               <div
                 key={patient.id}
                 className="bg-white border border-slate-200/80 rounded-xl p-4 md:p-5 hover:shadow-md hover:border-slate-300 transition-all"
@@ -194,7 +211,7 @@ export const Patients = () => {
                   {/* Patient Info */}
                   <div className="flex items-center gap-4 min-w-0">
                     <div className="w-12 h-12 bg-gradient-to-br from-sky-400 to-cyan-500 rounded-xl flex items-center justify-center text-white font-bold text-base shadow-lg shadow-sky-500/20 flex-shrink-0">
-                      {patient.name[0].toUpperCase()}
+                      {(patient.name || '?')[0].toUpperCase()}
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
@@ -260,7 +277,63 @@ export const Patients = () => {
                 )}
               </div>
             ))}
-          </div>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between pt-4 border-t border-slate-200 mt-4">
+                <p className="text-sm text-slate-500">
+                  Menampilkan {patients.length > 0 ? (currentPage - 1) * 25 + 1 : 0}-{Math.min(currentPage * 25, totalPatients)} dari {totalPatients} pasien
+                  {searchQuery && ` (filter: "${searchQuery}")`}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum
+                    if (totalPages <= 5) {
+                      pageNum = i + 1
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i
+                    } else {
+                      pageNum = currentPage - 2 + i
+                    }
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => handlePageChange(pageNum)}
+                        className={`w-9 h-9 rounded-lg text-sm font-medium transition-colors ${
+                          currentPage === pageNum
+                            ? 'bg-sky-500 text-white'
+                            : 'border border-slate-200 hover:bg-slate-50 text-slate-600'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    )
+                  })}
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -365,6 +438,15 @@ export const Patients = () => {
         onConfirm={handleDelete}
         title="Hapus Pasien"
         message={`Hapus "${deleteConfirm?.name}"? Semua kunjungan juga dihapus.`}
+      />
+
+      {/* Import Modal */}
+      <ImportPatientModal
+        isOpen={showImport}
+        onClose={() => setShowImport(false)}
+        onImport={async (data) => {
+          await importPatients([data])
+        }}
       />
     </div>
   )

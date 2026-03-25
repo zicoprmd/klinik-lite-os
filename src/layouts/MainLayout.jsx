@@ -9,7 +9,8 @@ export const MainLayout = () => {
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Main content wrapper with proper margin for fixed sidebar */}
+      <div className="flex-1 flex flex-col md:ml-64 min-h-screen">
         {/* Mobile/Tablet Header */}
         <header className="md:hidden sticky top-0 z-30 bg-white/80 backdrop-blur-lg border-b border-slate-200 px-4 py-3 flex items-center gap-3 shadow-sm">
           <button
@@ -30,6 +31,7 @@ export const MainLayout = () => {
           </div>
         </header>
 
+        {/* Main content - this area scrolls */}
         <main className="flex-1 overflow-auto">
           <Outlet />
         </main>

@@ -136,26 +136,82 @@ export const deleteUser = async (id) => {
 }
 
 // ==================== PATIENTS ====================
-export const getPatients = async (organizationId = null) => {
+export const getPatients = async (organizationId = null, options = {}) => {
+  const { page = 1, pageSize = 25, search = '', searchPhone = false } = options
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
+
   if (isSupabaseConfigured()) {
     try {
-      let query = supabase.from('patients').select('*').order('name')
-      if (organizationId) query = query.eq('organization_id', organizationId)
-      const { data, error } = await query
+      let query = supabase
+        .from('patients')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+
+      if (organizationId) {
+        query = query.eq('organization_id', organizationId)
+      }
+
+      // Apply search filter
+      if (search) {
+        if (searchPhone) {
+          query = query.or(`name.ilike.%${search}%,medical_record_number.ilike.%${search}%,phone.ilike.%${search}%`)
+        } else {
+          query = query.or(`name.ilike.%${search}%,medical_record_number.ilike.%${search}%`)
+        }
+      }
+
+      // Apply pagination
+      query = query.range(from, to)
+
+      const { data, error, count } = await query
+
       if (error) {
         console.error('Supabase getPatients error:', error)
         throw error
       }
-      return data
+
+      const totalCount = count || 0
+      return {
+        data,
+        totalCount,
+        totalPages: Math.ceil(totalCount / pageSize),
+        currentPage: page,
+        pageSize
+      }
     } catch (err) {
       console.error('Failed to fetch from Supabase, falling back to localStorage:', err)
     }
   }
+
   // Fallback to localStorage
   const stored = localStorage.getItem(STORAGE_KEYS.patients)
   let patients = stored ? JSON.parse(stored) : []
-  if (organizationId) patients = patients.filter(p => p.organization_id === organizationId)
-  return patients
+
+  if (organizationId) {
+    patients = patients.filter(p => p.organization_id === organizationId)
+  }
+
+  // Apply search filter for localStorage
+  if (search) {
+    const searchLower = search.toLowerCase()
+    patients = patients.filter(p =>
+      p.name?.toLowerCase().includes(searchLower) ||
+      p.medical_record_number?.toLowerCase().includes(searchLower) ||
+      (searchPhone && p.phone?.toLowerCase().includes(searchLower))
+    )
+  }
+
+  const totalCount = patients.length
+  const paginatedPatients = patients.slice(from, to)
+
+  return {
+    data: paginatedPatients,
+    totalCount,
+    totalPages: Math.ceil(totalCount / pageSize),
+    currentPage: page,
+    pageSize
+  }
 }
 
 export const addPatient = async (patient) => {
