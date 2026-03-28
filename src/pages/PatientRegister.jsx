@@ -1,9 +1,142 @@
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Button } from '../components/Button'
 import { Input, Select } from '../components/Input'
 import { KTPScanner } from '../components/KTPScanner'
 import * as db from '../lib/db'
+
+// Speech Recognition setup
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+
+const parseSpokenText = (text) => {
+  const result = {
+    name: '',
+    gender: '',
+    birth_date: '',
+    address: ''
+  }
+
+  if (!text || text.trim().length < 2) {
+    console.log('parseSpokenText: text kosong atau terlalu pendek', text)
+    return result
+  }
+
+  const lowerText = text.toLowerCase()
+  console.log('parseSpokenText: input=', text)
+
+  // Hapus punctuation untuk parsing yang lebih robust
+  const cleanText = text.replace(/[,.\-:;]+/g, ' ')
+
+  // Parse gender - lebih fleksibel
+  if (/\b(perempuan|wanita|cewek|bini|istri)\b/.test(lowerText)) {
+    result.gender = 'P'
+  } else if (/\b(laki|pria|cowok|laki-laki|suami|pria)\b/.test(lowerText)) {
+    result.gender = 'L'
+  }
+
+  // Parse birth date - banyak pola
+  const monthNames = 'januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember'
+  const monthAbbr = 'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec'
+  const monthAll = `${monthNames}|${monthAbbr}`
+  const monthMap = {
+    'jan': '01', 'januari': '01',
+    'feb': '02', 'februari': '02',
+    'mar': '03', 'maret': '03',
+    'apr': '04', 'april': '04',
+    'mei': '05', 'mei': '05',
+    'jun': '06', 'juni': '06',
+    'jul': '07', 'juli': '07',
+    'agu': '08', 'agustus': '08', 'aug': '08',
+    'sep': '09', 'september': '09',
+    'okt': '10', 'oct': '10', 'oktober': '10',
+    'nov': '11', 'november': '11',
+    'des': '12', 'dec': '12', 'desember': '12'
+  }
+
+  // Pola: "14 November 1996" atau "14 nov 1996" atau "14 11 1996" atau "tanggal 14 bulan 11 tahun 1996"
+  const datePatterns = [
+    new RegExp(`(\\d{1,2})\\s+(${monthAll})\\s+(\\d{4})`, 'i'),
+    new RegExp(`(\\d{1,2})\\s+(\\d{1,2})\\s+(\\d{4})`),
+    new RegExp(`tanggal\\s*(\\d{1,2})\\s*(?:bulan\\s*)?(\\d{1,2})\\s*(?:tahun\\s*)?(\\d{4})`, 'i'),
+    new RegExp(`lahir\\s+(?:tanggal\\s+)?(\\d{1,2})\\s+(?:bulan\\s+)?(\\d{1,2})\\s+(?:tahun\\s+)?(\\d{4})`, 'i')
+  ]
+
+  for (const pattern of datePatterns) {
+    const match = cleanText.match(pattern)
+    console.log('Trying date pattern:', pattern, '-> match:', match)
+    if (match && match[1] && match[2] && match[3]) {
+      const day = match[1].padStart(2, '0')
+      const monthRaw = match[2].toLowerCase()
+      const month = monthMap[monthRaw]
+      let year = match[3]
+
+      if (month && day && year) {
+        if (year.length === 2) {
+          year = parseInt(year) > 30 ? '19' + year : '20' + year
+        }
+        result.birth_date = `${year}-${month}-${day}`
+        console.log('parseSpokenText: birth_date parsed=', result.birth_date, 'from match:', match[0])
+        break
+      }
+    }
+  }
+
+  // Extract name - cari kata setelah "nama" atau di awal sebelum gender/date
+  const nameRegexes = [
+    /nama[:\s]+([a-zA-Z\s]+?)(?=\s+(?:laki|perempuan|lahir|tanggal|alamat|$))/i,
+    /saya\s+nama\s+([a-zA-Z\s]+?)(?=\s+(?:laki|perempuan|lahir|tanggal|alamat|$))/i,
+    /^([a-zA-Z\s]+?)(?=\s+(?:laki|perempuan|lahir|tanggal|alamat))/i
+  ]
+
+  for (const regex of nameRegexes) {
+    const match = cleanText.match(regex)
+    if (match && match[1]) {
+      result.name = match[1].trim().replace(/\s+/g, ' ')
+      console.log('parseSpokenText: name parsed=', result.name)
+      break
+    }
+  }
+
+  // Fallback name: Ambil kata pertama yang substantial sebelum stop words
+  if (!result.name) {
+    const words = cleanText.split(/\s+/)
+    const stopWords = new Set(['nama', 'saya', 'dan', 'di', 'ke', 'dengan', 'untuk', 'ini', 'itu', 'dari', 'the', 'a', 'an', 'is', 'are'])
+    const skipWords = new Set(['laki', 'laki-laki', 'perempuan', 'wanita', 'lahir', 'tanggal', 'bulan', 'tahun', 'alamat', 'tinggal', 'seorang', 'yang', 'umur', 'usia', 'pria', 'cewek', 'suami', 'istri'])
+
+    const nameWords = []
+    for (const word of words) {
+      const lower = word.toLowerCase().replace(/[.,:]/g, '')
+      if (skipWords.has(lower)) break
+      if (!stopWords.has(lower) && word.length > 2 && /^[a-zA-Z]+$/.test(word)) {
+        nameWords.push(word)
+      }
+    }
+    if (nameWords.length > 0) {
+      result.name = nameWords.join(' ')
+      console.log('parseSpokenText: name fallback=', result.name)
+    }
+  }
+
+  // Extract address - setelah "alamat", "tinggal", "domisili"
+  const addressRegexes = [
+    /alamat[:\s]+(.+)/i,
+    /tinggal\s+(?:di\s+)?(.+)/i,
+    /domisili[:\s]+(.+)/i,
+    /(?:jalan|jl|jln|perum|komplek|kampung)\s+[\w\s,]+/i
+  ]
+
+  for (const regex of addressRegexes) {
+    const match = text.match(regex)
+    if (match && match[1]) {
+      result.address = match[1].trim()
+      console.log('parseSpokenText: address parsed=', result.address)
+      break
+    }
+  }
+
+  console.log('parseSpokenText: result=', result)
+  return result
+}
 
 const calculateAge = (birthDate) => {
   if (!birthDate) return ''
@@ -23,6 +156,11 @@ export const PatientRegister = () => {
   const [error, setError] = useState('')
   const [showScanner, setShowScanner] = useState(false)
   const [scannedData, setScannedData] = useState(null)
+  const [isListening, setIsListening] = useState(false)
+  const [transcript, setTranscript] = useState('')
+  const [recognitionSupported] = useState(!!SpeechRecognition)
+  const recognitionRef = useRef(null)
+  const finalTranscriptRef = useRef('')
   const [form, setForm] = useState({
     name: '',
     gender: 'L',
@@ -34,6 +172,91 @@ export const PatientRegister = () => {
     blood_type: '',
     medical_record_number: ''
   })
+
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop()
+    }
+    setIsListening(false)
+  }, [])
+
+  const startListening = useCallback(() => {
+    // Check HTTPS (Web Speech API requires secure context)
+    const isHttps = location.protocol === 'https:'
+    const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+    if (!isHttps && !isLocalhost) {
+      alert('Speech to Text memerlukan HTTPS. Pastikan aplikasi diakses melalui https:// atau gunakan localhost.')
+      return
+    }
+
+    // Get SpeechRecognition fresh at call time (more reliable)
+    const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognitionClass) {
+      alert('Maaf, browser Anda tidak mendukung Speech Recognition. Gunakan Chrome atau Edge di HP.')
+      return
+    }
+
+    if (isListening) {
+      stopListening()
+      return
+    }
+
+    setTranscript('')
+    finalTranscriptRef.current = ''
+
+    const recognition = new SpeechRecognitionClass()
+    recognitionRef.current = recognition
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = 'id-ID'
+
+    recognition.onresult = (event) => {
+      let interimTranscript = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcriptPiece = event.results[i][0].transcript
+        if (event.results[i].isFinal) {
+          finalTranscriptRef.current += transcriptPiece
+        } else {
+          interimTranscript += transcriptPiece
+        }
+      }
+      setTranscript(finalTranscriptRef.current + interimTranscript)
+    }
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error)
+      setIsListening(false)
+      if (event.error === 'not-allowed') {
+        alert('Izin mikrofon ditolak. Klik ikon gembok 🔒 di address bar → Izinkan Mikrofon, lalu coba lagi.')
+      } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
+        alert('Error speech recognition: ' + event.error)
+      }
+    }
+
+    recognition.onend = () => {
+      console.log('Speech recognition ended. finalTranscript=', finalTranscriptRef.current)
+      setIsListening(false)
+      const finalText = finalTranscriptRef.current
+      if (finalText) {
+        const parsed = parseSpokenText(finalText)
+        setForm(prev => {
+          const updated = { ...prev }
+          if (parsed.name) updated.name = parsed.name
+          if (parsed.gender) updated.gender = parsed.gender
+          if (parsed.birth_date) {
+            updated.birth_date = parsed.birth_date
+            updated.age = calculateAge(parsed.birth_date)
+          }
+          if (parsed.address) updated.address = parsed.address
+          console.log('Form updated with parsed data:', updated)
+          return updated
+        })
+      }
+    }
+
+    recognition.start()
+    setIsListening(true)
+  }, [isListening, stopListening])
 
   const handleChange = (field, value) => {
     if (field === 'birth_date') {
@@ -185,6 +408,57 @@ export const PatientRegister = () => {
             </div>
           )}
         </div>
+
+        {/* Speech to Text Button */}
+        {recognitionSupported && (
+          <div className="mb-6">
+            <button
+              type="button"
+              onClick={startListening}
+              className={`w-full flex items-center justify-center gap-4 py-5 px-6 border-2 border-dashed rounded-2xl transition-all group ${
+                isListening
+                  ? 'bg-red-50 border-red-200 text-red-700 animate-pulse'
+                  : 'bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200 text-emerald-700 hover:from-emerald-100 hover:to-teal-100 hover:border-emerald-300'
+              }`}
+            >
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-lg transition-all ${
+                isListening
+                  ? 'bg-gradient-to-br from-red-500 to-rose-500 shadow-red-500/25'
+                  : 'bg-gradient-to-br from-emerald-500 to-teal-500 shadow-emerald-500/25 group-hover:shadow-emerald-500/40 group-hover:scale-105'
+              }`}>
+                {isListening ? (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                )}
+              </div>
+              <div className="text-left">
+                <div className="text-base font-semibold">{isListening ? 'Sedang Mendengarkan...' : 'Speech to Text'}</div>
+                <div className="text-sm opacity-70">
+                  {isListening ? 'Klik untuk berhenti' : 'Ucapkan nama, jenis kelamin, tanggal lahir, dan alamat'}
+                </div>
+              </div>
+            </button>
+
+            {/* Live Transcript Display */}
+            {(transcript || isListening) && (
+              <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${isListening ? 'bg-red-500 animate-pulse' : 'bg-slate-400'}`}></span>
+                  {isListening ? 'Mendengarkan...' : 'Hasil Speech'}
+                </div>
+                <p className="text-sm text-slate-700 font-mono">
+                  {transcript || (isListening ? '......' : '-')}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-6 md:p-8 space-y-5">
           {error && (
