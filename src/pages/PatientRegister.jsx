@@ -239,23 +239,33 @@ export const PatientRegister = () => {
         const transcriptPiece = result[0].transcript
 
         if (result.isFinal) {
-          // Deduplicate: mobile Chrome mengirim final results secara incremental
-          // (misal: "nov" -> "novi" -> "novia"). Check apakah piece sudah ada
-          // di末尾 (endsWith) atau sudah mengandung piece tsb (includes)
-          const piece = transcriptPiece.trim()
-          if (piece && !newFinalTranscript.endsWith(piece) && !newFinalTranscript.includes(piece)) {
-            // Check apakah piece adalah versi panjang dari kata yang sudah ada
-            // (misal sudah ada "nov", dapat "novi" -> skip karena "novi"包含 "nov")
-            const alreadyHasShorterVersion = newFinalTranscript.split(/\s+/).some(word =>
-              piece.startsWith(word) && piece.length > word.length
-            )
-            if (!alreadyHasShorterVersion) {
-              if (newFinalTranscript.length > 0 && !newFinalTranscript.endsWith(' ')) {
-                newFinalTranscript += ' '
+          // Mobile Chrome mengirim final results secara incremental
+          // (misal: "nov" -> "novi" -> "novia"). Deduplicate per-kata:
+          // hanya simpan versi terpanjang dari setiap kata
+          const existingWords = newFinalTranscript.split(/\s+/).filter(w => w.length > 0)
+          const newWords = transcriptPiece.trim().split(/\s+/).filter(w => w.length > 0)
+          const finalWords = [...existingWords]
+
+          for (const newWord of newWords) {
+            const lowerNew = newWord.toLowerCase()
+            const existingIdx = finalWords.findIndex(w => w.toLowerCase() === lowerNew)
+            if (existingIdx === -1) {
+              // Kata baru, cek apakah ada versi lebih pendek dari kata ini
+              const hasShorterVersion = finalWords.some(w =>
+                lowerNew.startsWith(w.toLowerCase()) && w.length < newWord.length
+              )
+              if (!hasShorterVersion) {
+                finalWords.push(newWord)
               }
-              newFinalTranscript += piece
+            } else {
+              // Kata sudah ada, replace dengan versi lebih panjang jika perlu
+              if (newWord.length > finalWords[existingIdx].length) {
+                finalWords[existingIdx] = newWord
+              }
             }
           }
+
+          newFinalTranscript = finalWords.join(' ')
         } else {
           interimTranscript += transcriptPiece
         }
