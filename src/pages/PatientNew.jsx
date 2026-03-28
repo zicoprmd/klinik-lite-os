@@ -242,10 +242,22 @@ export const PatientNew = () => {
         const transcriptPiece = result[0].transcript
 
         if (result.isFinal) {
-          // Replace final transcript with the complete final result
-          // (avoiding duplicates by checking if this exact text was already added)
-          if (!newFinalTranscript.includes(transcriptPiece)) {
-            newFinalTranscript += transcriptPiece
+          // Deduplicate: mobile Chrome mengirim final results secara incremental
+          // (misal: "nov" -> "novi" -> "novia"). Check apakah piece sudah ada
+          // di末尾 (endsWith) atau sudah mengandung piece tsb (includes)
+          const piece = transcriptPiece.trim()
+          if (piece && !newFinalTranscript.endsWith(piece) && !newFinalTranscript.includes(piece)) {
+            // Check juga apakah piece adalah prefix dari teks yang sudah ada
+            // (artinya teks lama sudah包含 piece yang lebih panjang)
+            const alreadyHasLongerVersion = newFinalTranscript.split(/\s+/).some(word =>
+              word.startsWith(piece) && word.length > piece.length
+            )
+            if (!alreadyHasLongerVersion) {
+              if (newFinalTranscript.length > 0 && !newFinalTranscript.endsWith(' ')) {
+                newFinalTranscript += ' '
+              }
+              newFinalTranscript += piece
+            }
           }
         } else {
           interimTranscript += transcriptPiece
