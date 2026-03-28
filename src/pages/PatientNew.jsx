@@ -247,12 +247,12 @@ export const PatientNew = () => {
           // di末尾 (endsWith) atau sudah mengandung piece tsb (includes)
           const piece = transcriptPiece.trim()
           if (piece && !newFinalTranscript.endsWith(piece) && !newFinalTranscript.includes(piece)) {
-            // Check juga apakah piece adalah prefix dari teks yang sudah ada
-            // (artinya teks lama sudah包含 piece yang lebih panjang)
-            const alreadyHasLongerVersion = newFinalTranscript.split(/\s+/).some(word =>
-              word.startsWith(piece) && word.length > piece.length
+            // Check apakah piece adalah versi panjang dari kata yang sudah ada
+            // (misal sudah ada "nov", dapat "novi" -> skip karena "novi"包含 "nov")
+            const alreadyHasShorterVersion = newFinalTranscript.split(/\s+/).some(word =>
+              piece.startsWith(word) && piece.length > word.length
             )
-            if (!alreadyHasLongerVersion) {
+            if (!alreadyHasShorterVersion) {
               if (newFinalTranscript.length > 0 && !newFinalTranscript.endsWith(' ')) {
                 newFinalTranscript += ' '
               }
