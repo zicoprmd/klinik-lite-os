@@ -162,6 +162,7 @@ export const PatientNew = () => {
   const [recognitionSupported] = useState(!!SpeechRecognition)
   const recognitionRef = useRef(null)
   const finalTranscriptRef = useRef('')
+  const processedResultIndexRef = useRef(new Set())
   const [form, setForm] = useState({
     name: '',
     gender: 'L',
@@ -204,6 +205,7 @@ export const PatientNew = () => {
 
     setTranscript('')
     finalTranscriptRef.current = ''
+    processedResultIndexRef.current = new Set()
 
     const recognition = new SpeechRecognitionClass()
     recognitionRef.current = recognition
@@ -214,6 +216,8 @@ export const PatientNew = () => {
     recognition.onresult = (event) => {
       let interimTranscript = ''
       for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (processedResultIndexRef.current.has(i)) continue
+        processedResultIndexRef.current.add(i)
         const transcriptPiece = event.results[i][0].transcript
         if (event.results[i].isFinal) {
           finalTranscriptRef.current += transcriptPiece
