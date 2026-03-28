@@ -22,11 +22,11 @@ const parseSpokenText = (text) => {
     return result
   }
 
-  const lowerText = text.toLowerCase()
   console.log('parseSpokenText: input=', text)
 
   // Hapus punctuation untuk parsing yang lebih robust
   const cleanText = text.replace(/[,.\-:;]+/g, ' ')
+  const lowerText = cleanText.toLowerCase()
 
   // Parse gender - lebih fleksibel
   if (/\b(perempuan|wanita|cewek|bini|istri)\b/.test(lowerText)) {
@@ -118,20 +118,42 @@ const parseSpokenText = (text) => {
     }
   }
 
-  // Extract address - setelah "alamat", "tinggal", "domisili"
+  // Extract address - setelah "alamat", "tinggal", "domisili", atau kata-kata umum lainnya
   const addressRegexes = [
-    /alamat[:\s]+(.+)/i,
+    /alamat[:\s]*(.+)/i,
     /tinggal\s+(?:di\s+)?(.+)/i,
-    /domisili[:\s]+(.+)/i,
-    /(?:jalan|jl|jln|perum|komplek|kampung)\s+[\w\s,]+/i
+    /domisili[:\s]*(.+)/i,
+    /bertempat\s+di\s+(.+)/i,
+    /di\s+(.+)/i
   ]
 
   for (const regex of addressRegexes) {
-    const match = text.match(regex)
+    const match = cleanText.match(regex)
     if (match && match[1]) {
       result.address = match[1].trim()
       console.log('parseSpokenText: address parsed=', result.address)
       break
+    }
+  }
+
+  // Fallback: jika tidak ada pola, ambil tudo teks setelah tanggal atau gender
+  if (!result.address) {
+    // Cari posisi terakhir dari tanggal atau gender, ambil teks setelahnya
+    const dateMatch = cleanText.match(/\d{1,2}\s+(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+\d{4}/i)
+    const genderMatch = cleanText.match(/(?:perempuan|laki-laki|wanita|pria)/i)
+    let startPos = 0
+
+    if (dateMatch) startPos = Math.max(startPos, dateMatch.index + dateMatch[0].length)
+    if (genderMatch) startPos = Math.max(startPos, genderMatch.index + genderMatch[0].length)
+
+    if (startPos > 0) {
+      const afterPos = cleanText.substring(startPos).trim()
+      // Ambil beberapa kata pertama setelah tanggal/gender sebagai address
+      const words = afterPos.split(/\s+/).slice(0, 20)
+      if (words.length > 0) {
+        result.address = words.join(' ')
+        console.log('parseSpokenText: address fallback=', result.address)
+      }
     }
   }
 
@@ -162,7 +184,6 @@ export const PatientNew = () => {
   const [recognitionSupported] = useState(!!SpeechRecognition)
   const recognitionRef = useRef(null)
   const finalTranscriptRef = useRef('')
-  const processedResultIndexRef = useRef(new Set())
   const [form, setForm] = useState({
     name: '',
     gender: 'L',
@@ -205,7 +226,6 @@ export const PatientNew = () => {
 
     setTranscript('')
     finalTranscriptRef.current = ''
-    processedResultIndexRef.current = new Set()
 
     const recognition = new SpeechRecognitionClass()
     recognitionRef.current = recognition
@@ -214,18 +234,26 @@ export const PatientNew = () => {
     recognition.lang = 'id-ID'
 
     recognition.onresult = (event) => {
+      let newFinalTranscript = finalTranscriptRef.current
       let interimTranscript = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (processedResultIndexRef.current.has(i)) continue
-        processedResultIndexRef.current.add(i)
-        const transcriptPiece = event.results[i][0].transcript
-        if (event.results[i].isFinal) {
-          finalTranscriptRef.current += transcriptPiece
+
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i]
+        const transcriptPiece = result[0].transcript
+
+        if (result.isFinal) {
+          // Replace final transcript with the complete final result
+          // (avoiding duplicates by checking if this exact text was already added)
+          if (!newFinalTranscript.includes(transcriptPiece)) {
+            newFinalTranscript += transcriptPiece
+          }
         } else {
           interimTranscript += transcriptPiece
         }
       }
-      setTranscript(finalTranscriptRef.current + interimTranscript)
+
+      finalTranscriptRef.current = newFinalTranscript
+      setTranscript(newFinalTranscript + (interimTranscript ? ' ' + interimTranscript : ''))
     }
 
     recognition.onerror = (event) => {
